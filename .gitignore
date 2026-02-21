@@ -1,0 +1,3 @@
+# Keep builds but ignore local dev files
+.DS_Store
+*.log
