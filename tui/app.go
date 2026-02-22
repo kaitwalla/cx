@@ -311,8 +311,6 @@ func (a *App) connect(host *config.Host) tea.Cmd {
 
 // buildConnectCommand builds the SSH command with tmux
 func (a *App) buildConnectCommand(host *config.Host) string {
-	var parts []string
-
 	// Build SSH command
 	sshCmd := fmt.Sprintf("ssh %s", host.Alias)
 
@@ -325,12 +323,8 @@ func (a *App) buildConnectCommand(host *config.Host) string {
 	// Escape single quotes for safe shell execution
 	escapedCmd := strings.ReplaceAll(ensureCmd, "'", "'\\''")
 
-	// Combine: SSH into host and run the ensure+tmux command
-	parts = append(parts, sshCmd)
-	parts = append(parts, "-t") // Force TTY allocation
-	parts = append(parts, fmt.Sprintf("'%s'", escapedCmd))
-
-	return strings.Join(parts, " ")
+	// Clear screen first, then run SSH with tmux command
+	return fmt.Sprintf("clear && %s -t '%s'", sshCmd, escapedCmd)
 }
 
 // View renders the app
