@@ -90,7 +90,11 @@ func GetInstallInstructions(osType OSType, distro LinuxDistro) string {
 // IMPORTANT: tmuxCmd is interpolated directly into a shell command.
 // Callers must ensure tmuxCmd does not contain untrusted user input.
 func BuildEnsureTmuxCommand(tmuxCmd string) string {
-	return fmt.Sprintf(`command -v tmux >/dev/null 2>&1 || {
+	// Prepend common paths for non-interactive SSH sessions where PATH may be minimal.
+	// macOS Homebrew: /opt/homebrew/bin (Apple Silicon), /usr/local/bin (Intel)
+	// Linux: /usr/local/bin for manual installs
+	return fmt.Sprintf(`export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+command -v tmux >/dev/null 2>&1 || {
   echo "tmux not found, installing..."
   if [ -f /etc/debian_version ]; then
     sudo apt-get update && sudo apt-get install -y tmux
