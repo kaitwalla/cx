@@ -8,15 +8,19 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
-	repoOwner  = "kaitwalla"
-	repoName   = "cx"
-	releaseTag = "latest"
+	repoOwner      = "kaitwalla"
+	repoName       = "cx"
+	releaseTag     = "latest"
+	checkInterval  = 24 * time.Hour
+	lastCheckFile  = ".cx_last_update_check"
 )
 
 var httpClient = &http.Client{
@@ -234,4 +238,80 @@ func copyFile(src, dst string) error {
 
 	fmt.Println("Update complete!")
 	return nil
+}
+
+// lastCheckPath returns the path to the last check timestamp file
+func lastCheckPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "cx", lastCheckFile)
+}
+
+// shouldCheck returns true if enough time has passed since last check
+func shouldCheck() bool {
+	data, err := os.ReadFile(lastCheckPath())
+	if err != nil {
+		return true // No file or error, check anyway
+	}
+
+	lastCheck, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+	if err != nil {
+		return true
+	}
+
+	return time.Since(lastCheck) >= checkInterval
+}
+
+// recordCheck saves the current time as the last check time
+func recordCheck() {
+	path := lastCheckPath()
+	os.MkdirAll(filepath.Dir(path), 0755)
+	os.WriteFile(path, []byte(time.Now().Format(time.RFC3339)), 0644)
+}
+
+// isNewer returns true if the release version is newer than current
+func isNewer(releaseTag, currentVersion string) bool {
+	// Strip 'v' prefix if present
+	release := strings.TrimPrefix(releaseTag, "v")
+	current := strings.TrimPrefix(currentVersion, "v")
+
+	// Don't update dev builds
+	if current == "dev" || current == "" {
+		return false
+	}
+
+	return release != current
+}
+
+// AutoUpdate checks for updates on launch (once per day) and auto-updates if available.
+// After updating, it re-executes the new binary with the same arguments.
+func AutoUpdate(currentVersion string) {
+	if !shouldCheck() {
+		return
+	}
+
+	release, err := Check()
+	if err != nil {
+		return // Silent fail - don't interrupt user
+	}
+
+	recordCheck()
+
+	if !isNewer(release.TagName, currentVersion) {
+		return
+	}
+
+	fmt.Printf("Updating cx to %s...\n", release.TagName)
+
+	if err := SelfUpdate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Auto-update failed: %v\n", err)
+		return
+	}
+
+	// Re-exec the updated binary
+	execPath, err := os.Executable()
+	if err != nil {
+		return
+	}
+
+	syscall.Exec(execPath, os.Args, os.Environ())
 }

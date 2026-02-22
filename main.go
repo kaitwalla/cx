@@ -17,6 +17,9 @@ func main() {
 	// Set version for TUI display
 	tui.Version = version
 
+	// Auto-update check (once per day)
+	update.AutoUpdate(version)
+
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "update":
