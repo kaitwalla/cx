@@ -84,3 +84,25 @@ func GetInstallInstructions(osType OSType, distro LinuxDistro) string {
 		return "Please install tmux for your operating system"
 	}
 }
+
+// BuildEnsureTmuxCommand builds a bash command that checks for tmux,
+// installs it if missing, then runs the given tmux command.
+// IMPORTANT: tmuxCmd is interpolated directly into a shell command.
+// Callers must ensure tmuxCmd does not contain untrusted user input.
+func BuildEnsureTmuxCommand(tmuxCmd string) string {
+	return fmt.Sprintf(`command -v tmux >/dev/null 2>&1 || {
+  echo "tmux not found, installing..."
+  if [ -f /etc/debian_version ]; then
+    sudo apt-get update && sudo apt-get install -y tmux
+  elif [ -f /etc/redhat-release ]; then
+    sudo yum install -y tmux
+  elif [ -f /etc/arch-release ]; then
+    sudo pacman -S --noconfirm tmux
+  elif [ "$(uname)" = "Darwin" ]; then
+    brew install tmux
+  else
+    echo "Cannot auto-install tmux. Please install manually."
+    exit 1
+  fi
+} && %s`, tmuxCmd)
+}

@@ -1,0 +1,61 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build binaries
+        run: |
+          VERSION=$(git rev-parse --short HEAD)
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o cx-darwin-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o cx-darwin-arm64 .
+          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o cx-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o cx-linux-arm64 .
+
+      - name: Generate checksums
+        run: |
+          sha256sum cx-darwin-amd64 > cx-darwin-amd64.sha256
+          sha256sum cx-darwin-arm64 > cx-darwin-arm64.sha256
+          sha256sum cx-linux-amd64 > cx-linux-amd64.sha256
+          sha256sum cx-linux-arm64 > cx-linux-arm64.sha256
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Delete existing latest release
+        run: gh release delete latest --cleanup-tag --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        run: |
+          gh release create latest \
+            --title "Latest Build (${{ steps.sha.outputs.short }})" \
+            --notes "Built from commit ${{ github.sha }}" \
+            --prerelease \
+            cx-darwin-amd64 \
+            cx-darwin-amd64.sha256 \
+            cx-darwin-arm64 \
+            cx-darwin-arm64.sha256 \
+            cx-linux-amd64 \
+            cx-linux-amd64.sha256 \
+            cx-linux-arm64 \
+            cx-linux-arm64.sha256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

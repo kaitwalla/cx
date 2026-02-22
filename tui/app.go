@@ -64,6 +64,8 @@ func loadHosts() tea.Msg {
 	if err != nil {
 		return errMsg{err}
 	}
+	// Sort by last used (most recent first)
+	hosts = config.SortByLastUsed(hosts)
 	return hostsLoadedMsg{hosts}
 }
 
@@ -296,6 +298,9 @@ func (a *App) executePush() tea.Cmd {
 
 // connect initiates SSH connection
 func (a *App) connect(host *config.Host) tea.Cmd {
+	// Record usage for sorting
+	config.RecordUsage(host.Alias)
+
 	return tea.ExecProcess(
 		exec.Command("bash", "-c", a.buildConnectCommand(host)),
 		func(err error) tea.Msg {
@@ -314,10 +319,16 @@ func (a *App) buildConnectCommand(host *config.Host) string {
 	// Build the remote tmux command using host alias as session name
 	tmuxCmd := tmux.BuildTmuxCommand(host.Alias)
 
-	// Combine: SSH into host and run tmux
+	// Wrap with ensure-tmux logic (checks for tmux, installs if missing)
+	ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
+
+	// Escape single quotes for safe shell execution
+	escapedCmd := strings.ReplaceAll(ensureCmd, "'", "'\\''")
+
+	// Combine: SSH into host and run the ensure+tmux command
 	parts = append(parts, sshCmd)
-	parts = append(parts, "-t")  // Force TTY allocation
-	parts = append(parts, fmt.Sprintf("'%s'", tmuxCmd))
+	parts = append(parts, "-t") // Force TTY allocation
+	parts = append(parts, fmt.Sprintf("'%s'", escapedCmd))
 
 	return strings.Join(parts, " ")
 }
