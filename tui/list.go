@@ -60,7 +60,7 @@ func (l *ListView) SelectedHost() *config.Host {
 func (l *ListView) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render(fmt.Sprintf("🖥  SSH Hosts %s", versionStyle.Render(Version))))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("🖥  SSH Hosts %s", versionStyle.Render("v"+Version))))
 	b.WriteString("\n\n")
 
 	if len(l.hosts) == 0 {
