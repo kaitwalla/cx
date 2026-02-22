@@ -19,6 +19,10 @@ var (
 			Foreground(primaryColor).
 			MarginBottom(1)
 
+	// Version style (dimmer, next to title)
+	versionStyle = lipgloss.NewStyle().
+			Foreground(subtleColor)
+
 	// List styles
 	listItemStyle = lipgloss.NewStyle().
 			PaddingLeft(2)

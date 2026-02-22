@@ -7,6 +7,9 @@ import (
 	"cx/config"
 )
 
+// Version is set by main to display in the UI
+var Version = "dev"
+
 // ListView renders the host list
 type ListView struct {
 	hosts    []config.Host
@@ -57,7 +60,7 @@ func (l *ListView) SelectedHost() *config.Host {
 func (l *ListView) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("🖥  SSH Hosts"))
+	b.WriteString(titleStyle.Render(fmt.Sprintf("🖥  SSH Hosts %s", versionStyle.Render(Version))))
 	b.WriteString("\n\n")
 
 	if len(l.hosts) == 0 {
