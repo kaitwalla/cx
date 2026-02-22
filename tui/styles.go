@@ -52,6 +52,16 @@ var (
 			Foreground(subtleColor).
 			MarginTop(1)
 
+	// Filter style
+	filterStyle = lipgloss.NewStyle().
+			Foreground(primaryColor).
+			Bold(true)
+
+	// Action mode indicator
+	actionModeStyle = lipgloss.NewStyle().
+			Foreground(warningColor).
+			Bold(true)
+
 	// Form styles
 	focusedStyle = lipgloss.NewStyle().
 			Foreground(primaryColor).

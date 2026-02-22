@@ -1,3 +1,8 @@
-# Keep builds but ignore local dev files
+# Built binaries (releases are built by GitHub Actions)
+cx
+cx-*
+*.sha256
+
+# OS and editor files
 .DS_Store
 *.log

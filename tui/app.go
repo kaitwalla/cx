@@ -126,9 +126,54 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateList handles list view input
 func (a App) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q", "esc":
-		return a, tea.Quit
+	key := msg.String()
+
+	// Handle action mode
+	if a.list.InActionMode() {
+		a.list.SetActionMode(false)
+		switch key {
+		case "q":
+			return a, tea.Quit
+		case "a":
+			a.mode = ModeAdd
+			a.form = NewFormView()
+			a.err = ""
+			a.status = ""
+		case "e":
+			if host := a.list.SelectedHost(); host != nil {
+				a.mode = ModeEdit
+				a.form = NewEditFormView(*host)
+				a.err = ""
+				a.status = ""
+			}
+		case "d":
+			if host := a.list.SelectedHost(); host != nil {
+				a.mode = ModeDelete
+				a.deleteHost = host
+				a.err = ""
+				a.status = ""
+			}
+		case "p":
+			if host := a.list.SelectedHost(); host != nil {
+				a.mode = ModePush
+				a.push = NewPushView(host)
+				a.err = ""
+				a.status = ""
+			}
+		}
+		// Any other key just exits action mode
+		return a, nil
+	}
+
+	// Normal mode
+	switch key {
+	case "esc":
+		// Clear filter, or quit if no filter
+		if a.list.Filter() != "" {
+			a.list.ClearFilter()
+		} else {
+			return a, tea.Quit
+		}
 
 	case "up", "k":
 		a.list.CursorUp()
@@ -136,39 +181,25 @@ func (a App) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		a.list.CursorDown()
 
-	case "a":
-		a.mode = ModeAdd
-		a.form = NewFormView()
-		a.err = ""
-		a.status = ""
+	case ";":
+		a.list.SetActionMode(true)
 
-	case "e":
-		if host := a.list.SelectedHost(); host != nil {
-			a.mode = ModeEdit
-			a.form = NewEditFormView(*host)
-			a.err = ""
-			a.status = ""
-		}
-
-	case "d":
-		if host := a.list.SelectedHost(); host != nil {
-			a.mode = ModeDelete
-			a.deleteHost = host
-			a.err = ""
-			a.status = ""
-		}
-
-	case "p":
-		if host := a.list.SelectedHost(); host != nil {
-			a.mode = ModePush
-			a.push = NewPushView(host)
-			a.err = ""
-			a.status = ""
-		}
+	case "backspace":
+		a.list.BackspaceFilter()
 
 	case "enter":
 		if host := a.list.SelectedHost(); host != nil {
+			a.list.ClearFilter()
 			return a, a.connect(host)
+		}
+
+	default:
+		// Type to filter - only single printable characters
+		if len(key) == 1 {
+			r := rune(key[0])
+			if r >= 32 && r < 127 {
+				a.list.AppendFilter(r)
+			}
 		}
 	}
 

@@ -93,6 +93,36 @@ func findChecksumAsset(release *Release) (string, error) {
 	return "", fmt.Errorf("no checksum found for %s", checksumName)
 }
 
+// findVersionAsset finds the VERSION file URL
+func findVersionAsset(release *Release) (string, error) {
+	for _, asset := range release.Assets {
+		if asset.Name == "VERSION" {
+			return asset.BrowserDownloadURL, nil
+		}
+	}
+	return "", fmt.Errorf("no VERSION file found in release")
+}
+
+// downloadVersion downloads and returns the release version from VERSION file
+func downloadVersion(url string) (string, error) {
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to download version: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("version download failed: %s", resp.Status)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read version: %w", err)
+	}
+
+	return strings.TrimSpace(string(data)), nil
+}
+
 // downloadChecksum downloads and parses the expected checksum
 func downloadChecksum(url string) (string, error) {
 	resp, err := httpClient.Get(url)
@@ -282,6 +312,24 @@ func isNewer(releaseTag, currentVersion string) bool {
 	return release != current
 }
 
+// getReleaseVersion fetches the actual version from the VERSION file in the release.
+// Falls back to release tag name for backward compatibility with older releases.
+func getReleaseVersion(release *Release) string {
+	versionURL, err := findVersionAsset(release)
+	if err != nil {
+		// Backward compatibility: older releases without VERSION file
+		// Fall back to tag name (will always trigger update for old clients)
+		return release.TagName
+	}
+
+	version, err := downloadVersion(versionURL)
+	if err != nil || version == "" {
+		return release.TagName
+	}
+
+	return version
+}
+
 // AutoUpdate checks for updates on launch (once per day) and auto-updates if available.
 // After updating, it re-executes the new binary with the same arguments.
 func AutoUpdate(currentVersion string) {
@@ -296,11 +344,12 @@ func AutoUpdate(currentVersion string) {
 
 	recordCheck()
 
-	if !isNewer(release.TagName, currentVersion) {
+	releaseVersion := getReleaseVersion(release)
+	if !isNewer(releaseVersion, currentVersion) {
 		return
 	}
 
-	fmt.Printf("Updating cx to %s...\n", release.TagName)
+	fmt.Printf("Updating cx to %s...\n", releaseVersion)
 
 	if err := SelfUpdate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Auto-update failed: %v\n", err)

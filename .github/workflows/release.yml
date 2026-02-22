@@ -27,12 +27,13 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o cx-linux-amd64 .
           GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o cx-linux-arm64 .
 
-      - name: Generate checksums
+      - name: Generate checksums and version file
         run: |
           sha256sum cx-darwin-amd64 > cx-darwin-amd64.sha256
           sha256sum cx-darwin-arm64 > cx-darwin-arm64.sha256
           sha256sum cx-linux-amd64 > cx-linux-amd64.sha256
           sha256sum cx-linux-arm64 > cx-linux-arm64.sha256
+          echo "$(git rev-parse --short HEAD)" > VERSION
 
       - name: Get short SHA
         id: sha
@@ -49,6 +50,7 @@ jobs:
             --title "Latest Build (${{ steps.sha.outputs.short }})" \
             --notes "Built from commit ${{ github.sha }}" \
             --prerelease \
+            VERSION \
             cx-darwin-amd64 \
             cx-darwin-amd64.sha256 \
             cx-darwin-arm64 \
