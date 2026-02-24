@@ -384,8 +384,10 @@ func (a *App) connect(host *config.Host) tea.Cmd {
 
 // buildConnectCommand builds the SSH command with tmux
 func (a *App) buildConnectCommand(host *config.Host) string {
-	// Build SSH command
-	sshCmd := fmt.Sprintf("ssh %s", host.Alias)
+	// Escape single quotes for safe shell interpolation
+	escapeShell := func(s string) string {
+		return strings.ReplaceAll(s, "'", "'\\''")
+	}
 
 	// Build the remote tmux command using host alias as session name
 	tmuxCmd := tmux.BuildTmuxCommand(host.Alias)
@@ -393,11 +395,12 @@ func (a *App) buildConnectCommand(host *config.Host) string {
 	// Wrap with ensure-tmux logic (checks for tmux, installs if missing)
 	ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
 
-	// Escape single quotes for safe shell execution
-	escapedCmd := strings.ReplaceAll(ensureCmd, "'", "'\\''")
+	// Escape for shell execution
+	escapedHost := escapeShell(host.Alias)
+	escapedCmd := escapeShell(ensureCmd)
 
 	// Clear screen first, then run SSH with tmux command
-	return fmt.Sprintf("clear && %s -t '%s'", sshCmd, escapedCmd)
+	return fmt.Sprintf("clear && ssh '%s' -t '%s'", escapedHost, escapedCmd)
 }
 
 // View renders the app

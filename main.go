@@ -39,13 +39,35 @@ func main() {
 			printHelp()
 			return
 		default:
-			// Treat as host alias for direct connection
+			// Parse host alias and optional flags
 			hostAlias := os.Args[1]
 			sessionName := hostAlias // Default session name is the host alias
-			if len(os.Args) > 2 {
-				sessionName = os.Args[2]
+			var command string
+
+			// Parse remaining arguments
+			for i := 2; i < len(os.Args); i++ {
+				arg := os.Args[i]
+				switch arg {
+				case "--cmd", "-c", "--command":
+					if i+1 < len(os.Args) {
+						command = os.Args[i+1]
+						i++ // Skip the next argument since we consumed it
+					} else {
+						fmt.Fprintf(os.Stderr, "Error: %s requires a command argument\n", arg)
+						os.Exit(1)
+					}
+				default:
+					// Treat as session name if no flag prefix
+					if !strings.HasPrefix(arg, "-") {
+						sessionName = arg
+					} else {
+						fmt.Fprintf(os.Stderr, "Unknown flag: %s\n", arg)
+						os.Exit(1)
+					}
+				}
 			}
-			if err := directConnect(hostAlias, sessionName); err != nil {
+
+			if err := directConnect(hostAlias, sessionName, command); err != nil {
 				fmt.Fprintf(os.Stderr, "Connection failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -64,16 +86,22 @@ func printHelp() {
 	fmt.Println("cx - SSH host manager")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  cx                      Launch interactive host selector")
-	fmt.Println("  cx <host>               Connect to host with tmux session")
-	fmt.Println("  cx <host> <session>     Connect with custom tmux session name")
-	fmt.Println("  cx update               Update to latest release")
-	fmt.Println("  cx version              Show version info")
-	fmt.Println("  cx help                 Show this help")
+	fmt.Println("  cx                              Launch interactive host selector")
+	fmt.Println("  cx <host>                       Connect to host with tmux session")
+	fmt.Println("  cx <host> <session>             Connect with custom tmux session name")
+	fmt.Println("  cx <host> --cmd '<command>'     Run command on host (no tmux)")
+	fmt.Println("  cx <host> <session> --cmd '...' Run command in named tmux session")
+	fmt.Println("  cx update                       Update to latest release")
+	fmt.Println("  cx version                      Show version info")
+	fmt.Println("  cx help                         Show this help")
+	fmt.Println()
+	fmt.Println("Flags:")
+	fmt.Println("  --cmd, -c, --command <command>    Run a command on the remote host")
 }
 
 // directConnect connects to a host directly without the TUI
-func directConnect(hostAlias, sessionName string) error {
+// If command is non-empty, it runs that command instead of the default tmux session
+func directConnect(hostAlias, sessionName, command string) error {
 	// Verify host exists in config
 	host, err := config.FindHost(hostAlias)
 	if err != nil {
@@ -86,12 +114,38 @@ func directConnect(hostAlias, sessionName string) error {
 	// Record usage for sorting in TUI
 	config.RecordUsage(hostAlias)
 
-	// Build the connection command
-	sshCmd := fmt.Sprintf("ssh %s", hostAlias)
-	tmuxCmd := tmux.BuildTmuxCommand(sessionName)
-	ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
-	escapedCmd := strings.ReplaceAll(ensureCmd, "'", "'\\''")
-	fullCmd := fmt.Sprintf("clear && %s -t '%s'", sshCmd, escapedCmd)
+	var fullCmd string
+
+	// Escape values for safe shell interpolation
+	escapeShell := func(s string) string {
+		return strings.ReplaceAll(s, "'", "'\\''")
+	}
+	escapedHost := escapeShell(hostAlias)
+	escapedSession := escapeShell(sessionName)
+
+	if command != "" {
+		// Run the specified command
+		escapedUserCmd := escapeShell(command)
+		// If sessionName differs from hostAlias, user wants tmux with the command
+		if sessionName != hostAlias {
+			// Run command inside a tmux session
+			// tmux new-session -A -s <session> '<command>'
+			tmuxCmd := fmt.Sprintf("tmux new-session -A -s '%s' '%s'",
+				escapedSession, escapedUserCmd)
+			ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
+			escapedCmd := escapeShell(ensureCmd)
+			fullCmd = fmt.Sprintf("clear && ssh '%s' -t '%s'", escapedHost, escapedCmd)
+		} else {
+			// Run command directly without tmux
+			fullCmd = fmt.Sprintf("clear && ssh '%s' '%s'", escapedHost, escapedUserCmd)
+		}
+	} else {
+		// Default behavior: connect with tmux session
+		tmuxCmd := tmux.BuildTmuxCommand(sessionName)
+		ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
+		escapedCmd := escapeShell(ensureCmd)
+		fullCmd = fmt.Sprintf("clear && ssh '%s' -t '%s'", escapedHost, escapedCmd)
+	}
 
 	// Execute
 	cmd := exec.Command("bash", "-c", fullCmd)

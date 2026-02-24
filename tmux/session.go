@@ -20,7 +20,9 @@ func BuildTmuxCommand(sessionName string) string {
 	if sessionName == "" {
 		sessionName = DefaultSessionName
 	}
-	return fmt.Sprintf("tmux new-session -A -s %s", sessionName)
+	// Escape single quotes for safe shell interpolation
+	escaped := strings.ReplaceAll(sessionName, "'", "'\\''")
+	return fmt.Sprintf("tmux new-session -A -s '%s'", escaped)
 }
 
 // BuildTmuxWithInstallCommand builds a command that checks for tmux and installs if needed
