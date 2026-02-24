@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"cx/config"
@@ -44,6 +46,10 @@ type errMsg struct{ err error }
 type statusMsg struct{ msg string }
 type connectDoneMsg struct{ err error }
 type pushDoneMsg struct{ err error }
+type pushChainMsg struct {
+	options []PushOption
+	nextIdx int
+}
 
 // NewApp creates a new application
 func NewApp() App {
@@ -119,6 +125,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.mode = ModeList
 		return a, nil
+
+	case pushChainMsg:
+		// Continue with the next push operation in the chain
+		return a, a.runPushOperation(msg.options, msg.nextIdx)
 	}
 
 	return a, nil
@@ -303,28 +313,60 @@ func (a App) updatePush(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // executePush runs the selected push operations
+// Uses tea.ExecProcess to properly release the terminal for interactive password prompts
 func (a *App) executePush() tea.Cmd {
-	return func() tea.Msg {
-		host := a.push.host
-		options := a.push.GetSelectedOptions()
+	options := a.push.GetSelectedOptions()
 
-		for _, opt := range options {
-			var err error
-			switch opt {
-			case PushDeployKey:
-				err = ssh.PushPublicKey(host.Alias, host.IdentityFile)
-			case PushSSHConfig:
-				err = ssh.PushSSHConfig(host.Alias)
-			case PushSSHKeys:
-				err = ssh.PushSSHKeys(host.Alias, nil)
-			}
-			if err != nil {
-				return pushDoneMsg{err}
-			}
-		}
-
-		return pushDoneMsg{nil}
+	if len(options) == 0 {
+		return func() tea.Msg { return pushDoneMsg{nil} }
 	}
+
+	// Run operations sequentially, starting with the first
+	return a.runPushOperation(options, 0)
+}
+
+// runPushOperation executes a single push operation and chains to the next
+func (a *App) runPushOperation(options []PushOption, idx int) tea.Cmd {
+	if idx >= len(options) {
+		return func() tea.Msg { return pushDoneMsg{nil} }
+	}
+
+	host := a.push.host
+	var cmd *exec.Cmd
+
+	switch options[idx] {
+	case PushDeployKey:
+		keyPath := host.IdentityFile
+		if keyPath == "" {
+			home, _ := os.UserHomeDir()
+			keyPath = filepath.Join(home, ".ssh", "id_ed25519")
+		}
+		// Use exec.Command with separate args to avoid shell injection
+		cmd = exec.Command("ssh-copy-id", "-i", keyPath, host.Alias)
+
+	case PushSSHConfig:
+		home, _ := os.UserHomeDir()
+		configPath := filepath.Join(home, ".ssh", "config")
+		// scp with explicit arguments, no shell interpolation
+		cmd = exec.Command("scp", configPath, host.Alias+":~/.ssh/config")
+
+	case PushSSHKeys:
+		// Use the existing ssh package function which handles file enumeration
+		// safely without shell glob expansion. This uses key auth (no interactive prompt).
+		if err := ssh.PushSSHKeys(host.Alias, nil); err != nil {
+			return func() tea.Msg { return pushDoneMsg{err} }
+		}
+		// Chain to next operation
+		return a.runPushOperation(options, idx+1)
+	}
+
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return pushDoneMsg{err}
+		}
+		// Chain to next operation
+		return pushChainMsg{options: options, nextIdx: idx + 1}
+	})
 }
 
 // connect initiates SSH connection
