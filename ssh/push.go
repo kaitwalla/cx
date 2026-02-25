@@ -61,50 +61,67 @@ func PushSSHConfig(alias string) error {
 	home, _ := os.UserHomeDir()
 	configPath := filepath.Join(home, ".ssh", "config")
 
-	// Read local config
-	content, err := os.ReadFile(configPath)
-	if err != nil {
+	if _, err := os.Stat(configPath); err != nil {
 		return fmt.Errorf("failed to read local SSH config: %w", err)
 	}
 
-	// Create remote .ssh directory and write config
-	remoteCmd := fmt.Sprintf(
-		"mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat > ~/.ssh/config && chmod 600 ~/.ssh/config",
-	)
+	// Ensure remote .ssh directory exists
+	if err := newSSHCmd(alias, "mkdir -p ~/.ssh && chmod 700 ~/.ssh").Run(); err != nil {
+		return fmt.Errorf("failed to create remote .ssh directory: %w", err)
+	}
 
-	cmd := exec.Command("ssh", alias, remoteCmd)
-	cmd.Stdin = strings.NewReader(string(content))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Copy config using scp
+	if err := scpToRemote(alias, configPath, "~/.ssh/config"); err != nil {
+		return err
+	}
+
+	// Set correct permissions
+	return newSSHCmd(alias, "chmod 600 ~/.ssh/config").Run()
 }
 
 // PushSSHKeys copies private keys to remote
 func PushSSHKeys(alias string, keyPaths []string) error {
 	home, _ := os.UserHomeDir()
+	sshDir := filepath.Join(home, ".ssh")
 
-	// If no keys specified, find all key pairs
+	// If no keys specified, find all key pairs (including in subdirectories)
 	if len(keyPaths) == 0 {
-		sshDir := filepath.Join(home, ".ssh")
-		entries, err := os.ReadDir(sshDir)
-		if err != nil {
-			return fmt.Errorf("failed to read .ssh directory: %w", err)
-		}
-
-		for _, entry := range entries {
-			if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-				name := entry.Name()
-				// Look for private keys (files without .pub that have a .pub counterpart)
-				if !strings.HasSuffix(name, ".pub") &&
-					name != "config" &&
-					name != "known_hosts" &&
-					name != "authorized_keys" {
-					pubPath := filepath.Join(sshDir, name+".pub")
-					if _, err := os.Stat(pubPath); err == nil {
-						keyPaths = append(keyPaths, filepath.Join(sshDir, name))
-					}
-				}
+		err := filepath.WalkDir(sshDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // Skip entries we can't read
 			}
+
+			// Skip hidden files/dirs and the root .ssh dir itself
+			if strings.HasPrefix(d.Name(), ".") && path != sshDir {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			// Skip non-key files
+			if d.IsDir() {
+				return nil
+			}
+
+			name := d.Name()
+			if strings.HasSuffix(name, ".pub") ||
+				name == "config" ||
+				name == "known_hosts" ||
+				name == "known_hosts.old" ||
+				name == "authorized_keys" {
+				return nil
+			}
+
+			// Check if this file has a matching .pub (indicates it's a key pair)
+			pubPath := path + ".pub"
+			if _, err := os.Stat(pubPath); err == nil {
+				keyPaths = append(keyPaths, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to scan .ssh directory: %w", err)
 		}
 	}
 
@@ -112,40 +129,78 @@ func PushSSHKeys(alias string, keyPaths []string) error {
 		return fmt.Errorf("no SSH keys found to push")
 	}
 
-	// Ensure remote .ssh exists
-	cmd := exec.Command("ssh", alias, "mkdir -p ~/.ssh && chmod 700 ~/.ssh")
-	if err := cmd.Run(); err != nil {
+	// Ensure remote .ssh exists with correct permissions
+	if err := newSSHCmd(alias, "mkdir -p ~/.ssh && chmod 700 ~/.ssh").Run(); err != nil {
 		return fmt.Errorf("failed to create remote .ssh directory: %w", err)
 	}
 
-	// Copy each key pair
+	// Copy each key pair using scp
 	for _, keyPath := range keyPaths {
+		// Determine the relative path from .ssh dir for remote destination
+		// Use filepath.ToSlash to ensure POSIX paths for remote host
+		relPath, err := filepath.Rel(sshDir, keyPath)
+		if err != nil {
+			relPath = filepath.Base(keyPath)
+		}
+		relPath = filepath.ToSlash(relPath)
+		remotePath := ".ssh/" + relPath
+
+		// Ensure remote subdirectory exists if needed
+		if idx := strings.LastIndex(remotePath, "/"); idx > len(".ssh") {
+			remoteDir := remotePath[:idx]
+			if err := newSSHCmd(alias, fmt.Sprintf("mkdir -p ~/%s", remoteDir)).Run(); err != nil {
+				return fmt.Errorf("failed to create remote directory %s: %w", remoteDir, err)
+			}
+		}
+
 		// Copy private key
-		if err := copyFileToRemote(alias, keyPath, "~/.ssh/"+filepath.Base(keyPath), "600"); err != nil {
+		if err := scpToRemote(alias, keyPath, "~/"+remotePath); err != nil {
 			return fmt.Errorf("failed to copy %s: %w", keyPath, err)
+		}
+		// Set permissions on private key (must succeed for security)
+		if err := newSSHCmd(alias, fmt.Sprintf("chmod 600 ~/%s", remotePath)).Run(); err != nil {
+			return fmt.Errorf("failed to set permissions on %s: %w", remotePath, err)
 		}
 
 		// Copy public key if exists
 		pubPath := keyPath + ".pub"
 		if _, err := os.Stat(pubPath); err == nil {
-			if err := copyFileToRemote(alias, pubPath, "~/.ssh/"+filepath.Base(pubPath), "644"); err != nil {
+			if err := scpToRemote(alias, pubPath, "~/"+remotePath+".pub"); err != nil {
 				return fmt.Errorf("failed to copy %s: %w", pubPath, err)
 			}
+			// Public key permissions less critical, but still set them
+			newSSHCmd(alias, fmt.Sprintf("chmod 644 ~/%s.pub", remotePath)).Run()
 		}
 	}
 
 	return nil
 }
 
-// copyFileToRemote copies a local file to a remote path via SSH
-func copyFileToRemote(alias, localPath, remotePath, mode string) error {
-	content, err := os.ReadFile(localPath)
+// scpToRemote copies a local file or directory to a remote path using scp
+func scpToRemote(alias, localPath, remotePath string) error {
+	info, err := os.Stat(localPath)
 	if err != nil {
 		return err
 	}
 
-	remoteCmd := fmt.Sprintf("cat > %s && chmod %s %s", remotePath, mode, remotePath)
-	cmd := exec.Command("ssh", alias, remoteCmd)
-	cmd.Stdin = strings.NewReader(string(content))
+	args := []string{"-q"}
+	if info.IsDir() {
+		args = append(args, "-r")
+	}
+	args = append(args, localPath, alias+":"+remotePath)
+
+	cmd := exec.Command("scp", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// newSSHCmd creates an SSH command with stdin/stdout/stderr wired up
+func newSSHCmd(alias string, remoteCmd string) *exec.Cmd {
+	cmd := exec.Command("ssh", alias, remoteCmd)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
 }
