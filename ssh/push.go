@@ -56,14 +56,31 @@ func PushPublicKey(alias string, keyPath string) error {
 	return cmd.Run()
 }
 
-// PushSSHConfig copies local ~/.ssh/config to remote
+// PushSSHConfig copies local ~/.ssh/config to remote with transformed paths
 func PushSSHConfig(alias string) error {
 	home, _ := os.UserHomeDir()
 	configPath := filepath.Join(home, ".ssh", "config")
 
-	if _, err := os.Stat(configPath); err != nil {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
 		return fmt.Errorf("failed to read local SSH config: %w", err)
 	}
+
+	// Transform IdentityFile paths to use ~/ instead of absolute paths
+	transformed := transformConfigPaths(string(content), home)
+
+	// Write to temp file
+	tmpFile, err := os.CreateTemp("", "ssh-config-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(transformed); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	tmpFile.Close()
 
 	// Ensure remote .ssh directory exists
 	if err := newSSHCmd(alias, "mkdir -p ~/.ssh && chmod 700 ~/.ssh").Run(); err != nil {
@@ -71,12 +88,71 @@ func PushSSHConfig(alias string) error {
 	}
 
 	// Copy config using scp
-	if err := scpToRemote(alias, configPath, "~/.ssh/config"); err != nil {
+	if err := scpToRemote(alias, tmpFile.Name(), "~/.ssh/config"); err != nil {
 		return err
 	}
 
 	// Set correct permissions
 	return newSSHCmd(alias, "chmod 600 ~/.ssh/config").Run()
+}
+
+// transformConfigPaths converts absolute IdentityFile paths to use ~/
+func transformConfigPaths(content, homeDir string) string {
+	lines := strings.Split(content, "\n")
+	sshDir := filepath.Join(homeDir, ".ssh")
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		if strings.HasPrefix(lower, "identityfile ") || strings.HasPrefix(lower, "identityfile\t") {
+			// Extract the path portion
+			parts := strings.SplitN(trimmed, " ", 2)
+			if len(parts) != 2 {
+				parts = strings.SplitN(trimmed, "\t", 2)
+			}
+			if len(parts) == 2 {
+				path := strings.TrimSpace(parts[1])
+				newPath := transformKeyPath(path, homeDir, sshDir)
+				if newPath != path {
+					// Preserve original indentation
+					indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+					lines[i] = indent + "IdentityFile " + newPath
+				}
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// transformKeyPath converts an absolute key path to use ~/.ssh/
+func transformKeyPath(path, homeDir, sshDir string) string {
+	// Already uses ~, leave it alone
+	if strings.HasPrefix(path, "~/") {
+		return path
+	}
+
+	// Check if path is under the .ssh directory
+	if strings.HasPrefix(path, sshDir+"/") || strings.HasPrefix(path, sshDir+"\\") {
+		relPath := path[len(sshDir)+1:]
+		return "~/.ssh/" + filepath.ToSlash(relPath)
+	}
+
+	// Check if path is under home directory (e.g., ~/.config/keys/)
+	if strings.HasPrefix(path, homeDir+"/") || strings.HasPrefix(path, homeDir+"\\") {
+		relPath := path[len(homeDir)+1:]
+		return "~/" + filepath.ToSlash(relPath)
+	}
+
+	// For paths outside home directory, try to extract just the .ssh portion
+	// e.g., /root/.ssh/id_rsa -> ~/.ssh/id_rsa
+	if idx := strings.Index(path, "/.ssh/"); idx != -1 {
+		return "~" + path[idx:]
+	}
+
+	// Can't transform, return as-is
+	return path
 }
 
 // PushSSHKeys copies private keys to remote
