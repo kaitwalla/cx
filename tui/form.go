@@ -20,19 +20,22 @@ const (
 	FieldUser
 	FieldPort
 	FieldIdentityFile
+	FieldTmuxProfile
 	FieldCount
 )
 
 // FormView handles the add/edit host form
 type FormView struct {
-	inputs      []textinput.Model
-	focusIndex  int
-	isEdit      bool
-	originalAlias string
-	err         string
-	keyOptions  []string
-	keyIndex    int
-	showKeyMenu bool
+	inputs         []textinput.Model
+	focusIndex     int
+	isEdit         bool
+	originalAlias  string
+	err            string
+	keyOptions     []string
+	keyIndex       int
+	showKeyMenu    bool
+	profileOptions []string
+	profileIndex   int
 }
 
 // NewFormView creates a new form for adding a host
@@ -71,15 +74,34 @@ func NewFormView() FormView {
 	inputs[FieldIdentityFile].CharLimit = 256
 	inputs[FieldIdentityFile].Width = 40
 
+	// TmuxProfile (not a text input, but we need a placeholder)
+	inputs[FieldTmuxProfile] = textinput.New()
+	inputs[FieldTmuxProfile].Placeholder = "use left/right to select"
+	inputs[FieldTmuxProfile].CharLimit = 0
+	inputs[FieldTmuxProfile].Width = 40
+
 	// Get available keys
 	keys, _ := config.ListKeyFiles()
 
+	// Get available profiles
+	var errMsg string
+	profileOptions := []string{"none"}
+	store, storeErr := config.LoadProfiles()
+	if storeErr != nil {
+		errMsg = fmt.Sprintf("Failed to load profiles: %v", storeErr)
+	} else if store != nil {
+		profileOptions = append(profileOptions, store.ListProfiles()...)
+	}
+
 	return FormView{
-		inputs:      inputs,
-		focusIndex:  0,
-		keyOptions:  keys,
-		keyIndex:    0,
-		showKeyMenu: false,
+		inputs:         inputs,
+		focusIndex:     0,
+		keyOptions:     keys,
+		keyIndex:       0,
+		err:            errMsg,
+		showKeyMenu:    false,
+		profileOptions: profileOptions,
+		profileIndex:   0,
 	}
 }
 
@@ -94,6 +116,18 @@ func NewEditFormView(host config.Host) FormView {
 	f.inputs[FieldUser].SetValue(host.User)
 	f.inputs[FieldPort].SetValue(host.Port)
 	f.inputs[FieldIdentityFile].SetValue(host.IdentityFile)
+
+	// Load existing profile assignment
+	hp, _ := config.LoadHostProfiles()
+	if hp != nil {
+		currentProfile := hp.GetHostProfile(host.Alias)
+		for i, p := range f.profileOptions {
+			if p == currentProfile {
+				f.profileIndex = i
+				break
+			}
+		}
+	}
 
 	return f
 }
@@ -130,6 +164,20 @@ func (f *FormView) Update(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 
+		case "left", "h":
+			// Handle profile selection with left/right
+			if f.focusIndex == int(FieldTmuxProfile) && len(f.profileOptions) > 0 {
+				f.profileIndex = (f.profileIndex - 1 + len(f.profileOptions)) % len(f.profileOptions)
+				return nil
+			}
+
+		case "right", "l":
+			// Handle profile selection with left/right
+			if f.focusIndex == int(FieldTmuxProfile) && len(f.profileOptions) > 0 {
+				f.profileIndex = (f.profileIndex + 1) % len(f.profileOptions)
+				return nil
+			}
+
 		case "ctrl+k":
 			// Toggle key selection menu if on identity file field
 			if f.focusIndex == int(FieldIdentityFile) && len(f.keyOptions) > 0 {
@@ -146,7 +194,10 @@ func (f *FormView) Update(msg tea.Msg) tea.Cmd {
 		}
 	}
 
-	// Handle text input
+	// Handle text input (skip for profile field which uses left/right)
+	if f.focusIndex == int(FieldTmuxProfile) {
+		return nil
+	}
 	var cmd tea.Cmd
 	f.inputs[f.focusIndex], cmd = f.inputs[f.focusIndex].Update(msg)
 	return cmd
@@ -163,7 +214,7 @@ func (f *FormView) View() string {
 	b.WriteString(titleStyle.Render("📝 " + title))
 	b.WriteString("\n\n")
 
-	labels := []string{"Alias", "Hostname/IP", "User", "Port", "Identity File"}
+	labels := []string{"Alias", "Hostname/IP", "User", "Port", "Identity File", "Tmux Profile"}
 
 	for i, input := range f.inputs {
 		label := labels[i]
@@ -173,7 +224,24 @@ func (f *FormView) View() string {
 			b.WriteString(blurredStyle.Render(fmt.Sprintf("  %s:", label)))
 		}
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("    %s\n", input.View()))
+
+		// Special rendering for profile field
+		if i == int(FieldTmuxProfile) {
+			b.WriteString("    < ")
+			for j, profile := range f.profileOptions {
+				if j == f.profileIndex {
+					b.WriteString(focusedStyle.Render(profile))
+				} else {
+					b.WriteString(blurredStyle.Render(profile))
+				}
+				if j < len(f.profileOptions)-1 {
+					b.WriteString(" | ")
+				}
+			}
+			b.WriteString(" >\n")
+		} else {
+			b.WriteString(fmt.Sprintf("    %s\n", input.View()))
+		}
 
 		// Show key menu for identity file field
 		if i == int(FieldIdentityFile) && f.showKeyMenu && len(f.keyOptions) > 0 {
@@ -199,7 +267,7 @@ func (f *FormView) View() string {
 	}
 
 	// Help
-	help := "tab: next field • ctrl+k: select key • enter: save • esc: cancel"
+	help := "tab: next field • ctrl+k: select key • left/right: profile • enter: save • esc: cancel"
 	b.WriteString(helpStyle.Render("  " + help))
 
 	return b.String()
@@ -251,4 +319,16 @@ func (f *FormView) SetError(err string) {
 // ClearError clears the error message
 func (f *FormView) ClearError() {
 	f.err = ""
+}
+
+// SelectedProfile returns the selected profile name (empty if "none")
+func (f *FormView) SelectedProfile() string {
+	if f.profileIndex >= 0 && f.profileIndex < len(f.profileOptions) {
+		profile := f.profileOptions[f.profileIndex]
+		if profile == "none" {
+			return ""
+		}
+		return profile
+	}
+	return ""
 }

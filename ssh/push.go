@@ -280,3 +280,35 @@ func newSSHCmd(alias string, remoteCmd string) *exec.Cmd {
 	cmd.Stderr = os.Stderr
 	return cmd
 }
+
+// PushTmuxProfile pushes a tmux.conf to the remote host
+func PushTmuxProfile(alias, configContent string) error {
+	// Write to temp file
+	tmpFile, err := os.CreateTemp("", "tmux-conf-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Copy to remote ~/.tmux.conf using scp
+	if err := scpToRemote(alias, tmpFile.Name(), "~/.tmux.conf"); err != nil {
+		return fmt.Errorf("failed to copy tmux.conf: %w", err)
+	}
+
+	// Set correct permissions
+	if err := newSSHCmd(alias, "chmod 644 ~/.tmux.conf").Run(); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
+	// Reload tmux config if tmux is running
+	// This is a best-effort reload; ignore errors if tmux isn't running
+	newSSHCmd(alias, "tmux source-file ~/.tmux.conf 2>/dev/null || true").Run()
+
+	return nil
+}

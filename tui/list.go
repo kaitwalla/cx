@@ -175,7 +175,7 @@ func (l *ListView) View() string {
 	// Help text
 	b.WriteString("\n")
 	if l.actionMode {
-		b.WriteString(helpStyle.Render("  a: add • e: edit • d: delete • p: push • q: quit • esc: cancel"))
+		b.WriteString(helpStyle.Render("  a: add • e: edit • d: delete • p: push • t: tmux profile • q: quit • esc: cancel"))
 	} else {
 		b.WriteString(helpStyle.Render("  type to filter • ;: actions • enter: connect • esc: clear"))
 	}

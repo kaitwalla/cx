@@ -25,6 +25,7 @@ const (
 	ModeConnect
 	ModeKeyDeploy
 	ModePush
+	ModeTmuxProfile
 )
 
 // App is the main application model
@@ -33,6 +34,7 @@ type App struct {
 	list       ListView
 	form       FormView
 	push       PushView
+	profile    ProfileView
 	hosts      []config.Host
 	err        string
 	status     string
@@ -50,6 +52,7 @@ type pushChainMsg struct {
 	options []PushOption
 	nextIdx int
 }
+type profilePushDoneMsg struct{ err error }
 
 // NewApp creates a new application
 func NewApp() App {
@@ -95,6 +98,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.updateDelete(msg)
 		case ModePush:
 			return a.updatePush(msg)
+		case ModeTmuxProfile:
+			return a.updateTmuxProfile(msg)
 		}
 
 	case hostsLoadedMsg:
@@ -129,6 +134,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pushChainMsg:
 		// Continue with the next push operation in the chain
 		return a, a.runPushOperation(msg.options, msg.nextIdx)
+
+	case profilePushDoneMsg:
+		if msg.err != nil {
+			a.err = msg.err.Error()
+		} else {
+			a.status = "Tmux profile pushed successfully"
+		}
+		a.mode = ModeList
+		return a, nil
 	}
 
 	return a, nil
@@ -167,6 +181,13 @@ func (a App) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if host := a.list.SelectedHost(); host != nil {
 				a.mode = ModePush
 				a.push = NewPushView(host)
+				a.err = ""
+				a.status = ""
+			}
+		case "t":
+			if host := a.list.SelectedHost(); host != nil {
+				a.mode = ModeTmuxProfile
+				a.profile = NewProfileView(host)
 				a.err = ""
 				a.status = ""
 			}
@@ -251,6 +272,14 @@ func (a App) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Save the profile assignment
+		profileName := a.form.SelectedProfile()
+		hp, _ := config.LoadHostProfiles()
+		if hp == nil {
+			hp = &config.HostProfiles{Assignments: make(map[string]string)}
+		}
+		hp.SetHostProfile(host.Alias, profileName)
+
 		a.mode = ModeList
 		a.status = fmt.Sprintf("Host %q saved", host.Alias)
 		return a, loadHosts
@@ -307,6 +336,26 @@ func (a App) updatePush(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a, a.executePush()
+	}
+
+	return a, nil
+}
+
+// updateTmuxProfile handles tmux profile view input
+func (a App) updateTmuxProfile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.mode = ModeList
+		return a, nil
+
+	case "left", "h":
+		a.profile.CursorLeft()
+
+	case "right", "l":
+		a.profile.CursorRight()
+
+	case "enter":
+		return a, a.executeTmuxProfilePush()
 	}
 
 	return a, nil
@@ -369,6 +418,49 @@ func (a *App) runPushOperation(options []PushOption, idx int) tea.Cmd {
 	})
 }
 
+// executeTmuxProfilePush pushes the selected tmux profile to the host
+func (a *App) executeTmuxProfilePush() tea.Cmd {
+	host := a.profile.host
+	profileName := a.profile.SelectedProfile()
+
+	// Save the host-profile association
+	hp, _ := config.LoadHostProfiles()
+	if hp == nil {
+		hp = &config.HostProfiles{Assignments: make(map[string]string)}
+	}
+	hp.SetHostProfile(host.Alias, profileName)
+
+	// If "none" selected, just save the assignment without pushing
+	if profileName == "" {
+		return func() tea.Msg {
+			return profilePushDoneMsg{nil}
+		}
+	}
+
+	// Get the profile and generate config
+	store, err := config.LoadProfiles()
+	if err != nil {
+		return func() tea.Msg {
+			return profilePushDoneMsg{err}
+		}
+	}
+
+	profile := store.GetProfile(profileName)
+	if profile == nil {
+		return func() tea.Msg {
+			return profilePushDoneMsg{fmt.Errorf("profile %q not found", profileName)}
+		}
+	}
+
+	configContent := profile.GenerateConfig()
+
+	// Push to remote
+	return func() tea.Msg {
+		err := ssh.PushTmuxProfile(host.Alias, configContent)
+		return profilePushDoneMsg{err}
+	}
+}
+
 // connect initiates SSH connection
 func (a *App) connect(host *config.Host) tea.Cmd {
 	// Record usage for sorting
@@ -389,8 +481,11 @@ func (a *App) buildConnectCommand(host *config.Host) string {
 		return strings.ReplaceAll(s, "'", "'\\''")
 	}
 
+	// Check if we're in iTerm2 for control mode
+	useControlMode := tmux.IsITerm()
+
 	// Build the remote tmux command using host alias as session name
-	tmuxCmd := tmux.BuildTmuxCommand(host.Alias)
+	tmuxCmd := tmux.BuildTmuxCommandWithOptions(host.Alias, useControlMode)
 
 	// Wrap with ensure-tmux logic (checks for tmux, installs if missing)
 	ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
@@ -419,6 +514,9 @@ func (a App) View() string {
 
 	case ModePush:
 		b.WriteString(a.push.View())
+
+	case ModeTmuxProfile:
+		b.WriteString(a.profile.View())
 	}
 
 	// Show status/error at bottom

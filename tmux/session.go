@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -11,17 +12,44 @@ const (
 	DefaultSessionName = "cx"
 )
 
+// IsITerm returns true if running inside iTerm2
+func IsITerm() bool {
+	// iTerm2 sets TERM_PROGRAM=iTerm.app or LC_TERMINAL=iTerm2
+	if os.Getenv("TERM_PROGRAM") == "iTerm.app" {
+		return true
+	}
+	if os.Getenv("LC_TERMINAL") == "iTerm2" {
+		return true
+	}
+	// Also check ITERM_SESSION_ID which is set in iTerm sessions
+	if os.Getenv("ITERM_SESSION_ID") != "" {
+		return true
+	}
+	return false
+}
+
 // BuildTmuxCommand builds the command to create or attach to a tmux session
 // If sessionName is empty, uses the default session name
 func BuildTmuxCommand(sessionName string) string {
+	return BuildTmuxCommandWithOptions(sessionName, false)
+}
+
+// BuildTmuxCommandWithOptions builds the command with optional control mode
+// controlMode: if true, adds -CC flag for iTerm2 integration
+func BuildTmuxCommandWithOptions(sessionName string, controlMode bool) string {
 	// tmux new-session -A -s <name>
 	// -A: Attach to session if it exists, create if it doesn't
 	// -s: Session name
+	// -CC: Control mode for iTerm2 native integration
 	if sessionName == "" {
 		sessionName = DefaultSessionName
 	}
 	// Escape single quotes for safe shell interpolation
 	escaped := strings.ReplaceAll(sessionName, "'", "'\\''")
+
+	if controlMode {
+		return fmt.Sprintf("tmux -CC new-session -A -s '%s'", escaped)
+	}
 	return fmt.Sprintf("tmux new-session -A -s '%s'", escaped)
 }
 

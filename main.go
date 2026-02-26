@@ -123,6 +123,9 @@ func directConnect(hostAlias, sessionName, command string) error {
 	escapedHost := escapeShell(hostAlias)
 	escapedSession := escapeShell(sessionName)
 
+	// Check if we're in iTerm2 for control mode
+	useControlMode := tmux.IsITerm()
+
 	if command != "" {
 		// Run the specified command
 		escapedUserCmd := escapeShell(command)
@@ -130,8 +133,14 @@ func directConnect(hostAlias, sessionName, command string) error {
 		if sessionName != hostAlias {
 			// Run command inside a tmux session
 			// tmux new-session -A -s <session> '<command>'
-			tmuxCmd := fmt.Sprintf("tmux new-session -A -s '%s' '%s'",
-				escapedSession, escapedUserCmd)
+			var tmuxCmd string
+			if useControlMode {
+				tmuxCmd = fmt.Sprintf("tmux -CC new-session -A -s '%s' '%s'",
+					escapedSession, escapedUserCmd)
+			} else {
+				tmuxCmd = fmt.Sprintf("tmux new-session -A -s '%s' '%s'",
+					escapedSession, escapedUserCmd)
+			}
 			ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
 			escapedCmd := escapeShell(ensureCmd)
 			fullCmd = fmt.Sprintf("clear && ssh '%s' -t '%s'", escapedHost, escapedCmd)
@@ -141,7 +150,7 @@ func directConnect(hostAlias, sessionName, command string) error {
 		}
 	} else {
 		// Default behavior: connect with tmux session
-		tmuxCmd := tmux.BuildTmuxCommand(sessionName)
+		tmuxCmd := tmux.BuildTmuxCommandWithOptions(sessionName, useControlMode)
 		ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
 		escapedCmd := escapeShell(ensureCmd)
 		fullCmd = fmt.Sprintf("clear && ssh '%s' -t '%s'", escapedHost, escapedCmd)
