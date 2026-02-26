@@ -135,7 +135,7 @@ func directConnect(hostAlias, sessionName, command string) error {
 			// tmux new-session -A -s <session> '<command>'
 			var tmuxCmd string
 			if useControlMode {
-				tmuxCmd = fmt.Sprintf("tmux -CC -p new-session -A -s '%s' '%s'",
+				tmuxCmd = fmt.Sprintf("tmux -CC new-session -A -s '%s' '%s'",
 					escapedSession, escapedUserCmd)
 			} else {
 				tmuxCmd = fmt.Sprintf("tmux new-session -A -s '%s' '%s'",

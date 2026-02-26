@@ -48,9 +48,8 @@ func BuildTmuxCommandWithOptions(sessionName string, controlMode bool) string {
 	escaped := strings.ReplaceAll(sessionName, "'", "'\\''")
 
 	if controlMode {
-		// -CC: control mode for iTerm2 native integration
-		// -p: use new profile (opens in current window as new tab)
-		return fmt.Sprintf("tmux -CC -p new-session -A -s '%s'", escaped)
+		// -CC: control mode for iTerm2 native integration (uses current window)
+		return fmt.Sprintf("tmux -CC new-session -A -s '%s'", escaped)
 	}
 	return fmt.Sprintf("tmux new-session -A -s '%s'", escaped)
 }
