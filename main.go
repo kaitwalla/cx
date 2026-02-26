@@ -43,6 +43,7 @@ func main() {
 			hostAlias := os.Args[1]
 			sessionName := hostAlias // Default session name is the host alias
 			var command string
+			var controlMode bool
 
 			// Parse remaining arguments
 			for i := 2; i < len(os.Args); i++ {
@@ -56,6 +57,13 @@ func main() {
 						fmt.Fprintf(os.Stderr, "Error: %s requires a command argument\n", arg)
 						os.Exit(1)
 					}
+				case "--cc":
+					// Enable iTerm2 tmux control mode (opens in new window/tab)
+					if tmux.IsITerm() {
+						controlMode = true
+					} else {
+						fmt.Fprintf(os.Stderr, "Warning: --cc only works in iTerm2, ignoring\n")
+					}
 				default:
 					// Treat as session name if no flag prefix
 					if !strings.HasPrefix(arg, "-") {
@@ -67,7 +75,7 @@ func main() {
 				}
 			}
 
-			if err := directConnect(hostAlias, sessionName, command); err != nil {
+			if err := directConnect(hostAlias, sessionName, command, controlMode); err != nil {
 				fmt.Fprintf(os.Stderr, "Connection failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -97,11 +105,12 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  --cmd, -c, --command <command>    Run a command on the remote host")
+	fmt.Println("  --cc                              Use iTerm2 tmux control mode (native tabs)")
 }
 
 // directConnect connects to a host directly without the TUI
 // If command is non-empty, it runs that command instead of the default tmux session
-func directConnect(hostAlias, sessionName, command string) error {
+func directConnect(hostAlias, sessionName, command string, controlMode bool) error {
 	// Verify host exists in config
 	host, err := config.FindHost(hostAlias)
 	if err != nil {
@@ -123,9 +132,6 @@ func directConnect(hostAlias, sessionName, command string) error {
 	escapedHost := escapeShell(hostAlias)
 	escapedSession := escapeShell(sessionName)
 
-	// Check if we're in iTerm2 for control mode
-	useControlMode := tmux.IsITerm()
-
 	if command != "" {
 		// Run the specified command
 		escapedUserCmd := escapeShell(command)
@@ -134,7 +140,7 @@ func directConnect(hostAlias, sessionName, command string) error {
 			// Run command inside a tmux session
 			// tmux new-session -A -s <session> '<command>'
 			var tmuxCmd string
-			if useControlMode {
+			if controlMode {
 				tmuxCmd = fmt.Sprintf("tmux -CC new-session -A -s '%s' '%s'",
 					escapedSession, escapedUserCmd)
 			} else {
@@ -150,7 +156,7 @@ func directConnect(hostAlias, sessionName, command string) error {
 		}
 	} else {
 		// Default behavior: connect with tmux session
-		tmuxCmd := tmux.BuildTmuxCommandWithOptions(sessionName, useControlMode)
+		tmuxCmd := tmux.BuildTmuxCommandWithOptions(sessionName, controlMode)
 		ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
 		escapedCmd := escapeShell(ensureCmd)
 		fullCmd = fmt.Sprintf("clear && ssh '%s' -t '%s'", escapedHost, escapedCmd)

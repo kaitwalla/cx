@@ -481,11 +481,9 @@ func (a *App) buildConnectCommand(host *config.Host) string {
 		return strings.ReplaceAll(s, "'", "'\\''")
 	}
 
-	// Check if we're in iTerm2 for control mode
-	useControlMode := tmux.IsITerm()
-
 	// Build the remote tmux command using host alias as session name
-	tmuxCmd := tmux.BuildTmuxCommandWithOptions(host.Alias, useControlMode)
+	// Control mode (-CC) is disabled by default; use CLI --cc flag for that
+	tmuxCmd := tmux.BuildTmuxCommand(host.Alias)
 
 	// Wrap with ensure-tmux logic (checks for tmux, installs if missing)
 	ensureCmd := tmux.BuildEnsureTmuxCommand(tmuxCmd)
