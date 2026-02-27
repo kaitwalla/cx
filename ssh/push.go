@@ -306,9 +306,9 @@ func PushTmuxProfile(alias, configContent string) error {
 		return fmt.Errorf("failed to set permissions: %w", err)
 	}
 
-	// Reload tmux config if tmux is running
-	// This is a best-effort reload; ignore errors if tmux isn't running
-	newSSHCmd(alias, "tmux source-file ~/.tmux.conf 2>/dev/null || true").Run()
+	// Kill tmux server so next connection starts fresh with new config
+	// source-file doesn't apply all settings (like set-clipboard, allow-passthrough)
+	newSSHCmd(alias, "tmux kill-server 2>/dev/null || true").Run()
 
 	return nil
 }
