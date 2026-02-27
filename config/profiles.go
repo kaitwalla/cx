@@ -198,6 +198,11 @@ bind m set -g mouse \; display "Mouse: #{?mouse,ON,OFF}"
 set -g history-limit 10000
 bind -n WheelUpPane if-shell -F -t = "#{mouse_any_flag}" "send-keys -M" "if -Ft= '#{pane_in_mode}' 'send-keys -M' 'select-pane -t=; copy-mode -e; send-keys -M'"
 bind -n WheelDownPane select-pane -t= \; send-keys -M
+
+# System Clipboard Integration (macOS)
+set -s copy-command 'pbcopy'
+bind -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel 'pbcopy'
+bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel 'pbcopy'
 `,
 		p.Name,
 		p.PrefixKey,
