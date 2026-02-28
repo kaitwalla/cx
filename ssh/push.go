@@ -193,13 +193,28 @@ func PushSSHKeys(alias string, keyPaths []string) error {
 				return nil
 			}
 
-			// Check if this file has a matching .pub (indicates it's a key pair)
+			// Check if this looks like a private key file
+			// Either has a matching .pub, or file content starts with key header
 			pubPath := path + ".pub"
+			hasPub := false
 			if _, err := os.Stat(pubPath); err == nil {
-				if !seen[path] {
-					seen[path] = true
-					keyPaths = append(keyPaths, path)
+				hasPub = true
+			}
+
+			isKey := hasPub
+			if !isKey {
+				// Check if file starts with a private key header
+				if content, err := os.ReadFile(path); err == nil {
+					header := string(content[:min(len(content), 50)])
+					if strings.Contains(header, "PRIVATE KEY") {
+						isKey = true
+					}
 				}
+			}
+
+			if isKey && !seen[path] {
+				seen[path] = true
+				keyPaths = append(keyPaths, path)
 			}
 			return nil
 		})
@@ -212,12 +227,10 @@ func PushSSHKeys(alias string, keyPaths []string) error {
 		if configContent, err := os.ReadFile(configPath); err == nil {
 			for _, keyPath := range extractIdentityFiles(string(configContent), home) {
 				if !seen[keyPath] {
-					// Verify the key exists and has a .pub file
+					// Verify the key exists (don't require .pub file)
 					if _, err := os.Stat(keyPath); err == nil {
-						if _, err := os.Stat(keyPath + ".pub"); err == nil {
-							seen[keyPath] = true
-							keyPaths = append(keyPaths, keyPath)
-						}
+						seen[keyPath] = true
+						keyPaths = append(keyPaths, keyPath)
 					}
 				}
 			}
