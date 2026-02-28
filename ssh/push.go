@@ -162,6 +162,10 @@ func PushSSHKeys(alias string, keyPaths []string) error {
 
 	// If no keys specified, find all key pairs (including in subdirectories)
 	if len(keyPaths) == 0 {
+		// Track keys we've already added to avoid duplicates
+		seen := make(map[string]bool)
+
+		// First, scan ~/.ssh for key pairs
 		err := filepath.WalkDir(sshDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil // Skip entries we can't read
@@ -192,12 +196,31 @@ func PushSSHKeys(alias string, keyPaths []string) error {
 			// Check if this file has a matching .pub (indicates it's a key pair)
 			pubPath := path + ".pub"
 			if _, err := os.Stat(pubPath); err == nil {
-				keyPaths = append(keyPaths, path)
+				if !seen[path] {
+					seen[path] = true
+					keyPaths = append(keyPaths, path)
+				}
 			}
 			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("failed to scan .ssh directory: %w", err)
+		}
+
+		// Also check SSH config for IdentityFile entries that might be outside ~/.ssh
+		configPath := filepath.Join(sshDir, "config")
+		if configContent, err := os.ReadFile(configPath); err == nil {
+			for _, keyPath := range extractIdentityFiles(string(configContent), home) {
+				if !seen[keyPath] {
+					// Verify the key exists and has a .pub file
+					if _, err := os.Stat(keyPath); err == nil {
+						if _, err := os.Stat(keyPath + ".pub"); err == nil {
+							seen[keyPath] = true
+							keyPaths = append(keyPaths, keyPath)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -270,6 +293,34 @@ func scpToRemote(alias, localPath, remotePath string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// extractIdentityFiles parses SSH config content and returns all IdentityFile paths
+func extractIdentityFiles(content, homeDir string) []string {
+	var paths []string
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		if strings.HasPrefix(lower, "identityfile ") || strings.HasPrefix(lower, "identityfile\t") {
+			parts := strings.SplitN(trimmed, " ", 2)
+			if len(parts) != 2 {
+				parts = strings.SplitN(trimmed, "\t", 2)
+			}
+			if len(parts) == 2 {
+				path := strings.TrimSpace(parts[1])
+				// Expand ~ to home directory
+				if strings.HasPrefix(path, "~/") {
+					path = filepath.Join(homeDir, path[2:])
+				}
+				paths = append(paths, path)
+			}
+		}
+	}
+
+	return paths
 }
 
 // newSSHCmd creates an SSH command with stdin/stdout/stderr wired up
