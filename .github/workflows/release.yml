@@ -1,63 +1,116 @@
-name: Build and Release
+name: Release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.21"
+  VERSION_PREFIX: "1.0"
+
 jobs:
-  build:
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Build binaries
-        run: |
-          VERSION=$(git rev-parse --short HEAD)
-          LDFLAGS="-s -w -X main.version=${VERSION}"
-          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o cx-darwin-amd64 .
-          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o cx-darwin-arm64 .
-          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o cx-linux-amd64 .
-          GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o cx-linux-arm64 .
+      - name: Test
+        run: go test ./...
 
-      - name: Generate checksums and version file
-        run: |
-          sha256sum cx-darwin-amd64 > cx-darwin-amd64.sha256
-          sha256sum cx-darwin-arm64 > cx-darwin-arm64.sha256
-          sha256sum cx-linux-amd64 > cx-linux-amd64.sha256
-          sha256sum cx-linux-arm64 > cx-linux-arm64.sha256
-          echo "$(git rev-parse --short HEAD)" > VERSION
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
 
-      - name: Get short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Delete existing latest release
-        run: gh release delete latest --cleanup-tag --yes || true
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create release
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ env.VERSION_PREFIX }}.${{ github.run_number }}
         run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "dist/cx-${GOOS}-${GOARCH}" \
+            .
+          cd dist
+          sha256sum "cx-${GOOS}-${GOARCH}" > "cx-${GOOS}-${GOARCH}.sha256"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish latest release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ env.VERSION_PREFIX }}.${{ github.run_number }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish GitHub release
+        run: |
+          printf '%s\n' "${VERSION}" > dist/VERSION
+          gh release delete latest --yes --cleanup-tag || true
+          git push origin :refs/tags/latest || true
           gh release create latest \
-            --title "Latest Build (${{ steps.sha.outputs.short }})" \
-            --notes "Built from commit ${{ github.sha }}" \
-            --prerelease \
-            VERSION \
-            cx-darwin-amd64 \
-            cx-darwin-amd64.sha256 \
-            cx-darwin-arm64 \
-            cx-darwin-arm64.sha256 \
-            cx-linux-amd64 \
-            cx-linux-amd64.sha256 \
-            cx-linux-arm64 \
-            cx-linux-arm64.sha256
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            dist/cx-* \
+            dist/VERSION \
+            --target "${GITHUB_SHA}" \
+            --title "cx ${VERSION}" \
+            --notes "Automated release for ${GITHUB_SHA}." \
+            --latest
